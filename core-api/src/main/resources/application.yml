@@ -1,0 +1,82 @@
+spring:
+  application:
+    name: documind-core-api
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/documind}
+    username: ${POSTGRES_USER:documind}
+    password: ${POSTGRES_PASSWORD:documind}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    table: flyway_schema_history_core
+    # The AI Service owns the chunks table in the same database and may create it first.
+    # Baseline at version 0 so V1 still runs on a database that already has that table.
+    baseline-on-migrate: true
+    baseline-version: 0
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: 5672
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 26MB
+  mvc:
+    async:
+      request-timeout: 600000
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  structured:
+    format:
+      console: ${LOG_FORMAT:logstash}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+app:
+  jwt:
+    # At least 32 characters. Set JWT_SECRET in production.
+    secret: ${JWT_SECRET:dev-only-secret-change-me-dev-only-secret-change-me}
+    access-token-ttl: 15m
+    refresh-token-ttl: 7d
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  admin-emails: ${ADMIN_EMAILS:}
+  storage:
+    endpoint: ${S3_ENDPOINT:http://localhost:8333}
+    access-key: ${S3_ACCESS_KEY:documind}
+    secret-key: ${S3_SECRET_KEY:documind-secret}
+    bucket: ${S3_BUCKET:documents}
+    region: ${S3_REGION:us-east-1}
+  ai-service:
+    url: ${AI_SERVICE_URL:http://localhost:8000}
+    token: ${SERVICE_TOKEN:change-me-service-token}
+    timeout: 30s
+  limits:
+    questions-per-minute: ${QUESTIONS_PER_MINUTE:20}
+    uploads-per-day: ${UPLOADS_PER_DAY:50}
+    answer-cache-ttl: 24h

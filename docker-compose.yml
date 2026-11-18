@@ -1,0 +1,124 @@
+name: documind
+
+x-db-env: &db-env
+  POSTGRES_DB: documind
+  POSTGRES_USER: documind
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment: *db-env
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U documind -d documind"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: documind
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in .env}
+    volumes: [rabbitdata:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+
+  # S3-compatible object storage. Any S3 service works (MinIO, AWS S3): change the S3_* settings.
+  storage:
+    image: chrislusf/seaweedfs:3.80
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /etc/s3.json <<JSON
+        {"identities":[{"name":"documind","credentials":[{"accessKey":"documind","secretKey":"$$S3_SECRET_KEY"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
+        JSON
+        exec weed server -dir=/data -ip.bind=0.0.0.0 -s3 -s3.port=8333 -s3.config=/etc/s3.json -master.volumeSizeLimitMB=1024
+    environment:
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+    volumes: [objectdata:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/status || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  ai-service:
+    build:
+      context: ./ai-service
+      args:
+        INSTALL_LOCAL_MODEL: ${INSTALL_LOCAL_MODEL:-true}
+    environment:
+      DATABASE_URL: postgresql+psycopg://documind:${POSTGRES_PASSWORD}@postgres:5432/documind
+      RABBITMQ_URL: amqp://documind:${RABBITMQ_PASSWORD}@rabbitmq:5672/
+      S3_ENDPOINT: http://storage:8333
+      S3_ACCESS_KEY: documind
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      storage: { condition: service_healthy }
+    restart: unless-stopped
+
+  core-api:
+    build: ./core-api
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/documind
+      POSTGRES_USER: documind
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: documind
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD}
+      REDIS_HOST: redis
+      S3_ENDPOINT: http://storage:8333
+      S3_ACCESS_KEY: documind
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      AI_SERVICE_URL: http://ai-service:8000
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+      QUESTIONS_PER_MINUTE: ${QUESTIONS_PER_MINUTE:-20}
+      UPLOADS_PER_DAY: ${UPLOADS_PER_DAY:-50}
+    ports: ["8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+      storage: { condition: service_healthy }
+      ai-service: { condition: service_healthy }
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports: ["3000:80"]
+    depends_on:
+      core-api: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  rabbitdata:
+  objectdata:
